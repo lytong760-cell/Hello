@@ -77,14 +77,36 @@ src/
 - Deferred to implementation: SSE parsing per provider (OpenAI/Anthropic/Google differ).
 - v1 ships source-only; prebuilt binaries later.
 
-## Task List (ordered)
-1. Scaffold `build.zig` + src layout.
-2. Config loader (JSON, env override, global+project merge).
-3. Provider interface + OpenAI implementation + streaming.
-4. Add Anthropic, Google, Kilo providers.
-5. Tool registry + read/write/edit/grep/glob/bash with permission prompts.
-6. REPL loop + slash commands.
-7. Session persistence/resume.
-8. Skills loader.
-9. Tests + smoke run.
-10. README + install instructions.
+## v1 Status
+- Implemented and building: config, providers (OpenAI/Anthropic/Google/Kilo), tools, REPL, sessions, skills, slash commands.
+- Remaining gaps below are v1.1.
+
+## v1.1 Polish (next)
+- README + install instructions (build from source, env vars).
+- Unit tests: JSON parsing, read/write/edit/glob/grep/bash, config merge, session round-trip.
+- Streaming responses: parse SSE per provider; print tokens as they arrive; tool calls assembled incrementally.
+- Tool-calling for Anthropic and Google (currently text-only).
+- One-shot mode: `hello "prompt"` runs single turn, prints, exits.
+- Memory cleanup: avoid page_allocator leaks reporting; free owned strings or use arena per turn.
+- Error UX: retry with backoff on network errors; clearer missing-key hints.
+- Context protection: cap tool results at 30k chars; truncate large reads with notice.
+- Session IDs: auto-generate if not provided; list/resume by id (`/session list`).
+
+## v1.1 Validation
+- `zig build test` passes new tests.
+- Manual: streaming turn prints incrementally; tool-using turn works against Kilo gateway when credits available.
+- One-shot: `hello "echo hi"` prints response and exits 0.
+## Task List (v1 - done)
+1-10. (completed)
+
+## Task List (v1.1 - next)
+1. Add README with build/run/env docs.
+2. Add tests in src/*_test.zig and wire into build.zig test step.
+3. Implement SSE streaming in llm/provider.zig for OpenAI; refactor chat to stream callback.
+4. Extend streaming to Anthropic and Google; unify tool-call deltas.
+5. Implement tool-calling for Anthropic and Google request/response.
+6. Add one-shot mode in main.zig.
+7. Memory cleanup pass (arena per turn).
+8. Retry/backoff for HTTP errors.
+9. Tool result truncation.
+10. Session list/resume commands.

@@ -51,7 +51,10 @@ fn sessionPath(allocator: std.mem.Allocator, cwd: []const u8, name: []const u8) 
         // global
         const home = try std.process.getEnvVarOwned(allocator, "HOME");
         defer allocator.free(home);
-        const dir = try std.fmt.allocPrint(allocator, "{s}/.local/share/hello/sessions", .{home});
+        const base = try std.fmt.allocPrint(allocator, "{s}/.local/share/hello", .{home});
+        defer allocator.free(base);
+        std.fs.makeDirAbsolute(base) catch |e| switch (e) { error.PathAlreadyExists => {}, else => return e };
+        const dir = try std.fmt.allocPrint(allocator, "{s}/sessions", .{base});
         defer allocator.free(dir);
         std.fs.makeDirAbsolute(dir) catch |e| switch (e) { error.PathAlreadyExists => {}, else => return e };
         return std.fmt.allocPrint(allocator, "{s}/{s}.json", .{ dir, name });
@@ -62,6 +65,48 @@ fn sessionPath(allocator: std.mem.Allocator, cwd: []const u8, name: []const u8) 
     return std.fmt.allocPrint(allocator, "{s}/{s}.json", .{ dir, name });
 }
 
+pub fn runOneShot(allocator: std.mem.Allocator, cfg: config.Config, cwd: []const u8, prompt: []const u8) !void {
+    const sk = try skills.loadAll(allocator, cwd);
+    var messages = std.ArrayList(types.Message).init(allocator);
+    defer messages.deinit();
+    const sys = try buildSystemPrompt(allocator, sk);
+    try messages.append(.{ .role = .system, .content = sys });
+    try messages.append(.{ .role = .user, .content = try allocator.dupe(u8, prompt) });
+    const tools_json = try buildToolsJson(allocator);
+    var turns: usize = 0;
+    while (turns < 20) : (turns += 1) {
+        const resp = llm.chat(allocator, cfg, messages.items, tools_json) catch |e| {
+            ui.print("LLM error: ");
+            ui.println(@errorName(e));
+            return;
+        };
+        try messages.append(.{ .role = .assistant, .content = resp.content, .tool_calls = resp.tool_calls });
+        if (resp.content) |c| ui.println(c);
+        if (resp.tool_calls.len == 0) break;
+        for (resp.tool_calls) |tc| {
+            var result: []const u8 = undefined;
+            if (tools.isDangerous(tc.name)) {
+                const desc = try std.fmt.allocPrint(allocator, "{s}({s})", .{ tc.name, tc.arguments });
+                if (permissions.confirm(allocator, desc)) {
+                    result = tools.runTool(allocator, tc.name, tc.arguments) catch |e| try std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(e)});
+                } else {
+                    result = try allocator.dupe(u8, "Permission denied by user.");
+                }
+            } else {
+                result = tools.runTool(allocator, tc.name, tc.arguments) catch |e| try std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(e)});
+            }
+            ui.print("[tool:");
+            ui.print(tc.name);
+            ui.print("] ");
+            const preview = if (result.len > 200) result[0..200] else result;
+            ui.println(preview);
+            // truncate tool result for context protection
+            const capped = if (result.len > 30000) result[0..30000] else result;
+            const final_result = if (result.len > 30000) try std.fmt.allocPrint(allocator, "{s}\n... (truncated)", .{capped}) else result;
+            try messages.append(.{ .role = .tool, .content = final_result, .tool_call_id = tc.id, .name = tc.name });
+        }
+    }
+}
 pub fn runRepl(allocator: std.mem.Allocator, cfg: config.Config, cwd: []const u8, session_name: []const u8) !void {
     var agent = Agent{
         .allocator = allocator,
@@ -123,6 +168,23 @@ pub fn runRepl(allocator: std.mem.Allocator, cfg: config.Config, cwd: []const u8
                 ui.println("");
                 continue;
             }
+            if (std.mem.eql(u8, input, "/session list")) {
+                // list sessions in same dir as current session_path
+                if (std.fs.path.dirname(agent.session_path)) |dir| {
+                    var d = std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch {
+                        ui.println("No sessions.");
+                        continue;
+                    };
+                    defer d.close();
+                    var it = d.iterate();
+                    while (it.next() catch null) |e| {
+                        if (e.kind == .file and std.mem.endsWith(u8, e.name, ".json")) {
+                            ui.println(e.name[0 .. e.name.len - 5]);
+                        }
+                    }
+                }
+                continue;
+            }
             if (std.mem.startsWith(u8, input, "/session ")) {
                 const name = input[9..];
                 agent.session_path = try sessionPath(allocator, cwd, name);
@@ -172,9 +234,11 @@ pub fn runRepl(allocator: std.mem.Allocator, cfg: config.Config, cwd: []const u8
                 // truncate print
                 const preview = if (result.len > 200) result[0..200] else result;
                 ui.println(preview);
+                const capped_r = if (result.len > 30000) result[0..30000] else result;
+                const final_r = if (result.len > 30000) try std.fmt.allocPrint(allocator, "{s}\n... (truncated)", .{capped_r}) else result;
                 try agent.messages.append(.{
                     .role = .tool,
-                    .content = result,
+                    .content = final_r,
                     .tool_call_id = tc.id,
                     .name = tc.name,
                 });

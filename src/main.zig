@@ -13,6 +13,8 @@ pub fn main() !void {
     var provider_override: ?[]const u8 = null;
     var model_override: ?[]const u8 = null;
     var session_name: []const u8 = "default";
+    var positional = std.ArrayList([]const u8).init(allocator);
+    defer positional.deinit();
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -28,11 +30,13 @@ pub fn main() !void {
             session_name = args[i];
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
             ui.println("hello - agent CLI");
-            ui.println("Usage: hello [--provider P] [--model M] [--session NAME]");
+            ui.println("Usage: hello [prompt] [--provider P] [--model M] [--session NAME]");
             return;
         } else if (std.mem.eql(u8, a, "--version")) {
             ui.println(build_options.version);
             return;
+        } else {
+            try positional.append(a);
         }
     }
 
@@ -42,6 +46,17 @@ pub fn main() !void {
     var cfg = config.load(allocator, cwd);
     if (provider_override) |p| cfg.provider = p;
     if (model_override) |m| cfg.model = m;
+
+    if (positional.items.len > 0) {
+        var prompt_buf = std.ArrayList(u8).init(allocator);
+        defer prompt_buf.deinit();
+        for (positional.items, 0..) |p, idx| {
+            if (idx > 0) try prompt_buf.append(' ');
+            try prompt_buf.appendSlice(p);
+        }
+        try repl.runOneShot(allocator, cfg, cwd, prompt_buf.items);
+        return;
+    }
 
     try repl.runRepl(allocator, cfg, cwd, session_name);
 }
