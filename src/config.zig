@@ -1,25 +1,38 @@
 const std = @import("std");
 
+pub const McpServerConfig = struct {
+    name: []const u8,
+    command: []const u8,
+    args: [][]const u8,
+    env: ?[]const u8 = null,
+};
+
 pub const Config = struct {
     provider: []const u8,
     model: []const u8,
+    mode: []const u8 = "code",
+    token_budget: usize = 80000,
     // api keys per provider name
     openai_key: ?[]const u8,
     anthropic_key: ?[]const u8,
     google_key: ?[]const u8,
     kilo_key: ?[]const u8,
     base_url_override: ?[]const u8, // for kilo/custom
+    mcp_servers: []McpServerConfig = &.{},
 };
 
 pub fn defaultConfig() Config {
     return .{
         .provider = "openai",
         .model = "gpt-4o-mini",
+        .mode = "code",
+        .token_budget = 80000,
         .openai_key = null,
         .anthropic_key = null,
         .google_key = null,
         .kilo_key = null,
         .base_url_override = null,
+        .mcp_servers = &.{},
     };
 }
 
@@ -52,10 +65,44 @@ fn applyJson(cfg: *Config, v: std.json.Value, allocator: std.mem.Allocator) void
             cfg.provider = d;
         }
     }
-    if (o.get("model")) |m| {
+    if (o.get("mode")) |m| {
         if (m == .string) {
             const d = allocator.dupe(u8, m.string) catch return;
-            cfg.model = d;
+            cfg.mode = d;
+        }
+    }
+    if (o.get("token_budget")) |tb| {
+        if (tb == .integer) cfg.token_budget = @intCast(tb.integer);
+    }
+    if (o.get("mcp_servers")) |ms| {
+        if (ms == .array) {
+            var list = std.ArrayList(McpServerConfig).init(allocator);
+            for (ms.array.items) |item| {
+                if (item != .object) continue;
+                const oo = item.object;
+                const name = if (oo.get("name")) |x| (if (x == .string) x.string else "") else "";
+                const cmd = if (oo.get("command")) |x| (if (x == .string) x.string else "") else "";
+                if (name.len == 0 or cmd.len == 0) continue;
+                var args_list = std.ArrayList([]const u8).init(allocator);
+                if (oo.get("args")) |a| {
+                    if (a == .array) {
+                        for (a.array.items) |arg| {
+                            if (arg == .string) {
+                                const d = allocator.dupe(u8, arg.string) catch continue;
+                                args_list.append(d) catch {};
+                            }
+                        }
+                    }
+                }
+                const cfg_item = McpServerConfig{
+                    .name = allocator.dupe(u8, name) catch continue,
+                    .command = allocator.dupe(u8, cmd) catch continue,
+                    .args = args_list.toOwnedSlice() catch &.{},
+                    .env = null,
+                };
+                list.append(cfg_item) catch {};
+            }
+            cfg.mcp_servers = list.toOwnedSlice() catch cfg.mcp_servers;
         }
     }
     if (o.get("api_keys")) |ak| {
@@ -112,6 +159,7 @@ pub fn load(allocator: std.mem.Allocator, cwd: []const u8) Config {
     cfg.anthropic_key = envOr(cfg.anthropic_key, "ANTHROPIC_API_KEY", allocator);
     cfg.google_key = envOr(cfg.google_key, "GOOGLE_API_KEY", allocator);
     cfg.kilo_key = envOr(cfg.kilo_key, "KILO_API_KEY", allocator);
+    if (cfg.kilo_key == null) cfg.kilo_key = envOr(null, "KILOCODE_TOKEN", allocator);
     return cfg;
 }
 

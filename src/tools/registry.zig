@@ -5,6 +5,7 @@ const edit = @import("edit.zig");
 const grep = @import("grep.zig");
 const glob = @import("glob.zig");
 const bash = @import("bash.zig");
+const mcp = @import("../mcp.zig");
 
 pub const ToolDef = struct {
     name: []const u8,
@@ -22,6 +23,7 @@ pub const tools = [_]ToolDef{
 };
 
 pub fn runTool(allocator: std.mem.Allocator, name: []const u8, args_json: []const u8) ![]u8 {
+    if (std.mem.startsWith(u8, name, "mcp__")) return mcp.callTool(allocator, name, args_json);
     if (std.mem.eql(u8, name, "read")) return read.run(allocator, args_json);
     if (std.mem.eql(u8, name, "write")) return write.run(allocator, args_json);
     if (std.mem.eql(u8, name, "edit")) return edit.run(allocator, args_json);
@@ -33,4 +35,17 @@ pub fn runTool(allocator: std.mem.Allocator, name: []const u8, args_json: []cons
 
 pub fn isDangerous(name: []const u8) bool {
     return std.mem.eql(u8, name, "write") or std.mem.eql(u8, name, "edit") or std.mem.eql(u8, name, "bash");
+}
+
+pub fn isDangerousForMode(name: []const u8, mode: []const u8) bool {
+    if (isDangerous(name)) return true;
+    if (std.mem.eql(u8, mode, "plan")) {
+        // stronger confirm for writes in plan mode (already dangerous)
+    }
+    return false;
+}
+
+pub fn availableTools(mode: []const u8) []const ToolDef {
+    _ = mode;
+    return &tools;
 }

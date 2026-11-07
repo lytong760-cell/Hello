@@ -12,6 +12,7 @@ pub fn main() !void {
 
     var provider_override: ?[]const u8 = null;
     var model_override: ?[]const u8 = null;
+    var mode_override: ?[]const u8 = null;
     var session_name: []const u8 = "default";
     var positional = std.ArrayList([]const u8).init(allocator);
     defer positional.deinit();
@@ -25,6 +26,9 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, a, "--model") and i + 1 < args.len) {
             i += 1;
             model_override = args[i];
+        } else if (std.mem.eql(u8, a, "--mode") and i + 1 < args.len) {
+            i += 1;
+            mode_override = args[i];
         } else if (std.mem.eql(u8, a, "--session") and i + 1 < args.len) {
             i += 1;
             session_name = args[i];
@@ -46,6 +50,7 @@ pub fn main() !void {
     var cfg = config.load(allocator, cwd);
     if (provider_override) |p| cfg.provider = p;
     if (model_override) |m| cfg.model = m;
+    if (mode_override) |m| cfg.mode = m;
 
     if (positional.items.len > 0) {
         var prompt_buf = std.ArrayList(u8).init(allocator);
