@@ -306,6 +306,110 @@ pub fn runRepl(allocator: std.mem.Allocator, cfg: config.Config, cwd: []const u8
                 ui.println("Session switched.");
                 continue;
             }
+            if (std.mem.eql(u8, input, "/connect")) {
+                ui.println("Provider:");
+                ui.println("1. OpenAI");
+                ui.println("2. Anthropic");
+                ui.println("3. Google");
+                ui.println("4. Kilo Gateway");
+                ui.print("choose Provider: ");
+                var buf2: [256]u8 = undefined;
+                const l1 = stdin.readUntilDelimiterOrEof(&buf2, '\n') catch null;
+                const c1 = if (l1) |x| std.mem.trim(u8, x, " \r\n") else "";
+                const choice = std.fmt.parseInt(usize, c1, 10) catch 0;
+                const prov_name = switch (choice) {
+                    1 => "openai",
+                    2 => "anthropic",
+                    3 => "google",
+                    4 => "kilo",
+                    else => null,
+                };
+                if (prov_name == null) { ui.println("Invalid."); continue; }
+                const pname = prov_name.?;
+                agent.cfg.provider = try allocator.dupe(u8, pname);
+                if (std.mem.eql(u8, pname, "kilo")) {
+                    if (agent.cfg.base_url_override == null) agent.cfg.base_url_override = "https://api.kilo.ai/api/gateway";
+                }
+                ui.print("API: ");
+                var buf3: [4096]u8 = undefined;
+                const l2 = stdin.readUntilDelimiterOrEof(&buf3, '\n') catch null;
+                const key = if (l2) |x| std.mem.trim(u8, x, " \r\n") else "";
+                if (std.mem.eql(u8, pname, "openai")) agent.cfg.openai_key = try allocator.dupe(u8, key);
+                if (std.mem.eql(u8, pname, "anthropic")) agent.cfg.anthropic_key = try allocator.dupe(u8, key);
+                if (std.mem.eql(u8, pname, "google")) agent.cfg.google_key = try allocator.dupe(u8, key);
+                if (std.mem.eql(u8, pname, "kilo")) agent.cfg.kilo_key = try allocator.dupe(u8, key);
+                config.save(allocator, agent.cwd, agent.cfg) catch {};
+                ui.println("Connected.");
+                continue;
+            }
+            if (std.mem.eql(u8, input, "/model")) {
+                var models = std.ArrayList([]const u8).init(allocator);
+                defer models.deinit();
+                const prov = agent.cfg.provider;
+                if (std.mem.eql(u8, prov, "openai") or std.mem.eql(u8, prov, "kilo")) {
+                    const key = if (std.mem.eql(u8, prov, "kilo")) agent.cfg.kilo_key else agent.cfg.openai_key;
+                    const base = if (agent.cfg.base_url_override) |b| b else "https://api.openai.com/v1";
+                    const url = try std.fmt.allocPrint(allocator, "{s}/models", .{base});
+                    defer allocator.free(url);
+                    var client = std.http.Client{ .allocator = allocator };
+                    defer client.deinit();
+                    const uri = try std.Uri.parse(url);
+                    var header_buf: [16384]u8 = undefined;
+                    var headers: [1]std.http.Header = undefined;
+                    var nheaders: usize = 0;
+                    if (key) |k| {
+                        headers[0] = .{ .name = "Authorization", .value = try std.fmt.allocPrint(allocator, "Bearer {s}", .{k}) };
+                        nheaders = 1;
+                    }
+                    var req = try client.open(.GET, uri, .{ .server_header_buffer = &header_buf, .extra_headers = headers[0..nheaders] });
+                    defer req.deinit();
+                    try req.send();
+                    try req.finish();
+                    try req.wait();
+                    const rb = try req.reader().readAllAlloc(allocator, 10 * 1024 * 1024);
+                    defer allocator.free(rb);
+                    const parsed = std.json.parseFromSlice(std.json.Value, allocator, rb, .{}) catch null;
+                    if (parsed) |p| {
+                        defer p.deinit();
+                        if (p.value.object.get("data")) |d| {
+                            if (d == .array) {
+                                for (d.array.items) |it| {
+                                    if (it == .object) {
+                                        if (it.object.get("id")) |idv| {
+                                            if (idv == .string) try models.append(try allocator.dupe(u8, idv.string));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (std.mem.eql(u8, prov, "anthropic")) {
+                    const list = [_][]const u8{ "claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307" };
+                    for (list) |m| try models.append(try allocator.dupe(u8, m));
+                } else if (std.mem.eql(u8, prov, "google")) {
+                    const list = [_][]const u8{ "gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash" };
+                    for (list) |m| try models.append(try allocator.dupe(u8, m));
+                }
+                if (models.items.len == 0) { ui.println("No models found."); continue; }
+                for (models.items, 0..) |m, idx| ui.print(std.fmt.allocPrint(allocator, "{d}. {s}\n", .{ idx + 1, m }) catch m);
+                ui.print("choose Model (number or id): ");
+                var bufm: [256]u8 = undefined;
+                const lm = stdin.readUntilDelimiterOrEof(&bufm, '\n') catch null;
+                const sel = if (lm) |x| std.mem.trim(u8, x, " \r\n") else "";
+                var chosen: ?[]const u8 = null;
+                const num = std.fmt.parseInt(usize, sel, 10) catch 0;
+                if (num > 0 and num <= models.items.len) {
+                    chosen = models.items[num - 1];
+                } else if (sel.len > 0) {
+                    chosen = try allocator.dupe(u8, sel);
+                }
+                if (chosen) |c| {
+                    agent.cfg.model = c;
+                    config.save(allocator, agent.cwd, agent.cfg) catch {};
+                    ui.println("Model updated.");
+                }
+                continue;
+            }
             ui.println("Unknown command.");
             continue;
         }

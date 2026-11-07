@@ -171,3 +171,48 @@ pub fn configDir(allocator: std.mem.Allocator, global: bool, cwd: []const u8) ![
     }
     return std.fmt.allocPrint(allocator, "{s}/.hello", .{cwd});
 }
+
+pub fn save(allocator: std.mem.Allocator, cwd: []const u8, cfg: Config) !void {
+    // prefer project .hello if exists else global
+    const proj = try std.fmt.allocPrint(allocator, "{s}/.hello", .{cwd});
+    defer allocator.free(proj);
+    std.fs.accessAbsolute(proj, .{}) catch {
+        const home = try std.process.getEnvVarOwned(allocator, "HOME");
+        defer allocator.free(home);
+        const dir = try std.fmt.allocPrint(allocator, "{s}/.config/hello", .{home});
+        defer allocator.free(dir);
+        std.fs.makeDirAbsolute(dir) catch |e| switch (e) { error.PathAlreadyExists => {}, else => return e };
+        const path = try std.fmt.allocPrint(allocator, "{s}/config.json", .{dir});
+        defer allocator.free(path);
+        return writeConfigFile(allocator, path, cfg);
+    };
+    std.fs.makeDirAbsolute(proj) catch |e| switch (e) { error.PathAlreadyExists => {}, else => return e };
+    const path = try std.fmt.allocPrint(allocator, "{s}/config.json", .{proj});
+    defer allocator.free(path);
+    return writeConfigFile(allocator, path, cfg);
+}
+
+fn writeConfigFile(allocator: std.mem.Allocator, path: []const u8, cfg: Config) !void {
+    var body = std.ArrayList(u8).init(allocator);
+    defer body.deinit();
+    const w = body.writer();
+    try w.writeAll("{\"provider\":\"");
+    try w.writeAll(cfg.provider);
+    try w.writeAll("\",\"model\":\"");
+    try w.writeAll(cfg.model);
+    try w.writeAll("\",\"mode\":\"");
+    try w.writeAll(cfg.mode);
+    try w.writeAll("\",\"token_budget\":");
+    try w.print("{d}", .{cfg.token_budget});
+    try w.writeAll(",\"api_keys\":{");
+    // keys
+    var first = true;
+    if (cfg.openai_key) |k| { if (!first) try w.writeByte(','); first=false; try w.print("\"openai\":\"{s}\"", .{k}); }
+    if (cfg.anthropic_key) |k| { if (!first) try w.writeByte(','); first=false; try w.print("\"anthropic\":\"{s}\"", .{k}); }
+    if (cfg.google_key) |k| { if (!first) try w.writeByte(','); first=false; try w.print("\"google\":\"{s}\"", .{k}); }
+    if (cfg.kilo_key) |k| { if (!first) try w.writeByte(','); first=false; try w.print("\"kilo\":\"{s}\"", .{k}); }
+    try w.writeAll("}}");
+    const f = try std.fs.createFileAbsolute(path, .{ .truncate = true });
+    defer f.close();
+    try f.writeAll(body.items);
+}
