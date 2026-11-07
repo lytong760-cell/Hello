@@ -18,6 +18,7 @@ const Agent = struct {
     messages: std.ArrayList(types.Message),
     skills_list: []skills.Skill,
     session_path: []const u8,
+    auto_approve: bool = false,
     tools_json: []const u8,
     mode: []const u8,
 };
@@ -168,6 +169,7 @@ pub fn runOneShot(allocator: std.mem.Allocator, cfg: config.Config, cwd: []const
     const tools_json = try buildToolsJson(allocator);
     mcp.init(allocator, cfg);
     var turns: usize = 0;
+    var auto_approve = false;
     while (turns < 20) : (turns += 1) {
         compactIfNeeded(allocator, &messages, cfg);
         var ctx = StreamCtx{};
@@ -184,11 +186,18 @@ pub fn runOneShot(allocator: std.mem.Allocator, cfg: config.Config, cwd: []const
             var result: []const u8 = undefined;
             if (tools.isDangerousForMode(tc.name, mode)) {
                 const desc = try std.fmt.allocPrint(allocator, "{s}({s})", .{ tc.name, tc.arguments });
-                if (permissions.confirm(allocator, desc)) {
+                var allowed = auto_approve;
+                if (!allowed) {
+                    const rc = permissions.confirm(allocator, desc);
+                    if (rc == 2) { auto_approve = true; allowed = true; }
+                    else if (rc == 1) allowed = true;
+                }
+                if (allowed) {
                     result = tools.runTool(allocator, tc.name, tc.arguments) catch |e| try std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(e)});
                 } else {
                     result = try allocator.dupe(u8, "Permission denied by user.");
                 }
+                allocator.free(desc);
             } else {
                 result = tools.runTool(allocator, tc.name, tc.arguments) catch |e| try std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(e)});
             }
@@ -242,7 +251,7 @@ pub fn runRepl(allocator: std.mem.Allocator, cfg: config.Config, cwd: []const u8
             // slash command
             if (std.mem.eql(u8, input, "/exit") or std.mem.eql(u8, input, "/quit")) break;
             if (std.mem.eql(u8, input, "/help")) {
-                ui.println("/help /clear /model <name> /provider <name> /session <name> /skills /exit");
+                ui.println("/help /clear /model /connect /session <name> /skills /auto_approve /exit");
                 continue;
             }
             if (std.mem.eql(u8, input, "/clear")) {
@@ -410,6 +419,11 @@ pub fn runRepl(allocator: std.mem.Allocator, cfg: config.Config, cwd: []const u8
                 }
                 continue;
             }
+            if (std.mem.eql(u8, input, "/auto_approve")) {
+                agent.auto_approve = !agent.auto_approve;
+                if (agent.auto_approve) ui.println("Auto-approve ON.") else ui.println("Auto-approve OFF.");
+                continue;
+            }
             ui.println("Unknown command.");
             continue;
         }
@@ -439,11 +453,18 @@ pub fn runRepl(allocator: std.mem.Allocator, cfg: config.Config, cwd: []const u8
                 var result: []const u8 = undefined;
                 if (tools.isDangerousForMode(tc.name, agent.mode)) {
                     const desc = try std.fmt.allocPrint(allocator, "{s}({s})", .{ tc.name, tc.arguments });
-                    if (permissions.confirm(allocator, desc)) {
+                    var allowed = agent.auto_approve;
+                    if (!allowed) {
+                        const rc = permissions.confirm(allocator, desc);
+                        if (rc == 2) { agent.auto_approve = true; allowed = true; }
+                        else if (rc == 1) allowed = true;
+                    }
+                    if (allowed) {
                         result = tools.runTool(allocator, tc.name, tc.arguments) catch |e| try std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(e)});
                     } else {
                         result = try allocator.dupe(u8, "Permission denied by user.");
                     }
+                    allocator.free(desc);
                 } else {
                     result = tools.runTool(allocator, tc.name, tc.arguments) catch |e| try std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(e)});
                 }
